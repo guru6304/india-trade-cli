@@ -8,6 +8,10 @@ on:
   schedule:
     # Nightly at 01:00 UTC — runs slow tests (SSE streams, Monte Carlo, etc.)
     - cron: "0 1 * * *"
+  # The slow-tests job already gates on workflow_dispatch, but the trigger was
+  # never declared — so the slow tier could only ever run on the nightly cron
+  # and had no way to be exercised on demand.
+  workflow_dispatch:
 
 jobs:
   test:
