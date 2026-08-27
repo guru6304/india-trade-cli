@@ -56,3 +56,6 @@ docs/*.docx
 docs/node_modules/
 docs/package-lock.json
 docs/package.json
+
+# Test-run artifacts (PDF exports written by the suite)
+.pytest_trading_platform/

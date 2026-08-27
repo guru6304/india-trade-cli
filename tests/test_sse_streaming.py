@@ -22,6 +22,49 @@ import json
 
 import pytest
 
+# Bounds for the live-server SSE tests. Every wait is capped so a regression in
+# the endpoints shows up as a failure rather than a hung job — the /stream/*
+# generators never terminate on their own.
+SSE_SERVER_STARTUP_TIMEOUT = 20.0  # seconds to wait for uvicorn to bind
+SSE_SERVER_SHUTDOWN_TIMEOUT = 15.0  # seconds to wait for the server thread to exit
+SSE_HTTP_TIMEOUT = 10.0  # seconds to wait for response headers
+
+
+@pytest.fixture(scope="module")
+def sse_server():
+    """Run web.api:app under uvicorn on an ephemeral port; yield its base URL.
+
+    Shared across the streaming tests — starting a server per test would pay
+    the bind/teardown cost six times over.
+    """
+    import threading
+    import time
+
+    import uvicorn
+
+    from web.api import app
+
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + SSE_SERVER_STARTUP_TIMEOUT
+    while not server.started and time.monotonic() < deadline:
+        if not thread.is_alive():
+            raise RuntimeError("uvicorn thread exited before the server started")
+        time.sleep(0.05)
+    if not server.started:
+        server.should_exit = True
+        raise RuntimeError(f"uvicorn did not start within {SSE_SERVER_STARTUP_TIMEOUT}s")
+
+    port = server.servers[0].sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=SSE_SERVER_SHUTDOWN_TIMEOUT)
+
 
 # ─────────────────────────────────────────────────────────────────
 # Helpers
@@ -332,89 +375,97 @@ class TestSSEEndpoints:
 
     # ── Fast: route registration checks (no HTTP connection) ─────────────
 
+    @staticmethod
+    def _registered_paths(app) -> list[str]:
+        """Collect every route path on the app, including nested routers.
+
+        Starlette 1.6 wraps `include_router()` results in an `_IncludedRouter`
+        that carries child routes but no `.path` of its own, so a flat scan of
+        `app.routes` misses anything mounted through a router — and raises
+        AttributeError on the wrapper. Walk the tree instead.
+        """
+        paths: list[str] = []
+
+        def walk(routes) -> None:
+            for route in routes:
+                path = getattr(route, "path", None)
+                if path:
+                    paths.append(path)
+                children = getattr(route, "routes", None) or getattr(
+                    getattr(route, "router", None), "routes", None
+                )
+                if children:
+                    walk(children)
+
+        walk(app.routes)
+        return paths
+
     def test_prices_route_registered(self):
         """GET /stream/prices route must be registered on the FastAPI app."""
         from web.api import app
 
-        paths = [r.path for r in app.routes]
+        paths = self._registered_paths(app)
         assert "/stream/prices" in paths, f"/stream/prices not found in routes: {paths}"
 
     def test_alerts_route_registered(self):
         """GET /stream/alerts route must be registered on the FastAPI app."""
         from web.api import app
 
-        paths = [r.path for r in app.routes]
+        paths = self._registered_paths(app)
         assert "/stream/alerts" in paths, f"/stream/alerts not found in routes: {paths}"
 
     # ── Slow: live connection tests (excluded from default CI run) ────────
+    #
+    # These drive a real uvicorn server over a real socket rather than
+    # TestClient. /stream/prices and /stream/alerts are endless generators
+    # (they heartbeat forever), and TestClient buffers a response to
+    # completion before handing it back — even via .stream() — so it blocks
+    # on __enter__ and never surfaces the headers. A real server streams the
+    # headers immediately and cancels the generator when the client hangs up.
+
+    @staticmethod
+    def _open_stream(base_url: str, path: str):
+        """Open an SSE request and return (status_code, headers), then disconnect."""
+        import httpx
+
+        with httpx.stream("GET", f"{base_url}{path}", timeout=SSE_HTTP_TIMEOUT) as resp:
+            return resp.status_code, resp.headers
 
     @pytest.mark.slow
-    def test_stream_prices_returns_200(self):
+    def test_stream_prices_returns_200(self, sse_server):
         """GET /stream/prices should return 200."""
-        from fastapi.testclient import TestClient
-
-        from web.api import app
-
-        with TestClient(app, raise_server_exceptions=False) as client:
-            with client.stream("GET", "/stream/prices") as resp:
-                assert resp.status_code == 200
+        status, _ = self._open_stream(sse_server, "/stream/prices")
+        assert status == 200
 
     @pytest.mark.slow
-    def test_stream_prices_content_type(self):
+    def test_stream_prices_content_type(self, sse_server):
         """GET /stream/prices must respond with text/event-stream content type."""
-        from fastapi.testclient import TestClient
-
-        from web.api import app
-
-        with TestClient(app, raise_server_exceptions=False) as client:
-            with client.stream("GET", "/stream/prices") as resp:
-                content_type = resp.headers.get("content-type", "")
-                assert "text/event-stream" in content_type
+        _, headers = self._open_stream(sse_server, "/stream/prices")
+        assert "text/event-stream" in headers.get("content-type", "")
 
     @pytest.mark.slow
-    def test_stream_alerts_returns_200(self):
+    def test_stream_alerts_returns_200(self, sse_server):
         """GET /stream/alerts should return 200."""
-        from fastapi.testclient import TestClient
-
-        from web.api import app
-
-        with TestClient(app, raise_server_exceptions=False) as client:
-            with client.stream("GET", "/stream/alerts") as resp:
-                assert resp.status_code == 200
+        status, _ = self._open_stream(sse_server, "/stream/alerts")
+        assert status == 200
 
     @pytest.mark.slow
-    def test_stream_alerts_content_type(self):
+    def test_stream_alerts_content_type(self, sse_server):
         """GET /stream/alerts must respond with text/event-stream content type."""
-        from fastapi.testclient import TestClient
-
-        from web.api import app
-
-        with TestClient(app, raise_server_exceptions=False) as client:
-            with client.stream("GET", "/stream/alerts") as resp:
-                content_type = resp.headers.get("content-type", "")
-                assert "text/event-stream" in content_type
+        _, headers = self._open_stream(sse_server, "/stream/alerts")
+        assert "text/event-stream" in headers.get("content-type", "")
 
     @pytest.mark.slow
-    def test_stream_prices_cache_control_header(self):
+    def test_stream_prices_cache_control_header(self, sse_server):
         """GET /stream/prices should set Cache-Control: no-cache."""
-        from fastapi.testclient import TestClient
-
-        from web.api import app
-
-        with TestClient(app, raise_server_exceptions=False) as client:
-            with client.stream("GET", "/stream/prices") as resp:
-                assert resp.headers.get("cache-control") == "no-cache"
+        _, headers = self._open_stream(sse_server, "/stream/prices")
+        assert headers.get("cache-control") == "no-cache"
 
     @pytest.mark.slow
-    def test_stream_alerts_cache_control_header(self):
+    def test_stream_alerts_cache_control_header(self, sse_server):
         """GET /stream/alerts should set Cache-Control: no-cache."""
-        from fastapi.testclient import TestClient
-
-        from web.api import app
-
-        with TestClient(app, raise_server_exceptions=False) as client:
-            with client.stream("GET", "/stream/alerts") as resp:
-                assert resp.headers.get("cache-control") == "no-cache"
+        _, headers = self._open_stream(sse_server, "/stream/alerts")
+        assert headers.get("cache-control") == "no-cache"
 
     def test_price_event_format_is_valid_sse(self):
         """

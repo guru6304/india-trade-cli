@@ -12,6 +12,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Fast tier: skip slow & network tests, run in parallel
     strategy:
       matrix:
@@ -41,6 +42,7 @@ jobs:
   slow-tests:
     # Runs only on schedule (nightly) or manual dispatch — not on every PR
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:
@@ -61,6 +63,7 @@ jobs:
 
   frontend-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -81,6 +84,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
