@@ -45,3 +45,11 @@ pytz>=2024.1                # Timezone handling (IST)
 pytest>=7.0.0               # Test framework
 pytest-mock>=3.10.0         # Mocking helpers
 scipy>=1.11
+python-telegram-bot>=20.0
+google-genai
+smartapi-python
+pyotp
+yfinance
+requests
+python-dotenv
+pytz
