@@ -14,9 +14,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("IndianFNOBot")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+# Check all common environment variable names for the Gemini key
+GEMINI_KEY = (
+    os.getenv("GEMINI_API_KEY")
+    or os.getenv("GOOGLE_API_KEY")
+    or os.getenv("GEMINI_KEY")
+)
 
-ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
+if not GEMINI_KEY:
+    logger.warning("No Gemini API key detected! Set GEMINI_API_KEY in Render.")
+    ai_client = None
+else:
+    # Clean any accidental quotes or whitespace
+    clean_key = GEMINI_KEY.strip().strip("'\"")
+    ai_client = genai.Client(api_key=clean_key)
 
 # ── Render Health Check HTTP Server ──────────────────────────────────
 class HealthHandler(BaseHTTPRequestHandler):
