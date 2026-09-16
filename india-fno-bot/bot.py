@@ -103,7 +103,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     try:
-        resp = ai_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        resp = ai_client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt)
         await update.message.reply_text(f"📈 *Trade Setup: {sym}*\n\n{resp.text}", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"AI Generation failed: {e}")
@@ -115,7 +115,7 @@ async def brief(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Summarize expected bias, global cues, crude oil impact, and key support/resistance zones for today."
     )
     try:
-        resp = ai_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        resp = ai_client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt)
         await update.message.reply_text(f"🌅 *Pre-Market Briefing*\n\n{resp.text}", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"Brief generation failed: {e}")
